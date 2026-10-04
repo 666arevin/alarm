@@ -45,7 +45,16 @@ class DataAggregationService():
         pass
         
     
-    def get_radar_data(self, session: Session):
+    def get_radar_data(self, session: Session) -> str:
+        """Данная функция очень насойчиво пытается получить данные от радара.
+        Она не завершит свою работу пока их не получит.
+
+        Args:
+            session (Session): объект сессии подключения.
+
+        Returns:
+            str: основная html страница сайта радар.
+        """
             
         flag_connection_error = 0
         
@@ -66,14 +75,19 @@ class DataAggregationService():
                 
                 # если мы получили ответ от радара, сообщаем серверу если нужно
                 # что подключение восстановленно
-                if response.status_code == 200 and was_mistake == True:
-                    server_was_notified = self.radar_is_available(error=False)
+                if response.status_code == 200 and was_mistake:
+                    
+                    server_was_notified = self.local_server_notification(
+                        error=False,
+                        url="http://localhost/GetDataError",
+                    )
                     
                 # возвращает не обработанный html
                 main_body = response.text
                 
-                with open(DATA_FOLDER / "radar_data_raw.html", mode="w", encoding="utf-8") as f:
-                    f.write(main_body)
+                logger.debug(
+                    "get_radar_data успешно отработала."
+                )                    
                     
                 return main_body
             
@@ -86,7 +100,10 @@ class DataAggregationService():
                     
                     # отправляем локальному серверу Flask информацию об ошибке 
                     # при этом продолжаем попытки достучаться до радара
-                    server_was_notified = self.radar_is_available(error=True)
+                    server_was_notified = self.local_server_notification(
+                        error=True,
+                        url="http://localhost/GetDataError",
+                    )
                     was_mistake = True
                 
                 # логируем ошибки
@@ -99,11 +116,26 @@ class DataAggregationService():
                     logger.warning(
                         "Программа не смогла получить ответ от радара."
                     )
-                
+                    
             
             
-    def process_radar_data(self, data: str):
+    def process_radar_data(self, data: str) -> DataAggregationService | None:
+        """_summary_
+
+        Args:
+            data (str): _description_
+
+        Returns:
+            DataAggregationService | None: _description_
+        """
+        # флаг максимального количество сообщений с неправильным форматом
+        flag_wrong_format = 0
+        was_incorrect_format = False
         
+        # флаг был ли оповещен сервер о проблемах с форматом
+        server_was_notified = False
+        
+        # основные массивы для сбора информации из html
         main_info_process = list()
         date_time_process = list()
 
@@ -113,14 +145,45 @@ class DataAggregationService():
         main_info = soup.find_all("div", attrs={"class": "tgme_widget_message_text"})
         
         for el in main_info:
+            
+            # проверяем формат
             match = re.search(
                 r"❗️Радар по всей России",
                 el.text,
             )
-            if not match:
-                return DataAggregationService("Формат данных от радара был изменен.")
             
-            # отсекаем не нужную часть, оставляем только города
+            if not match:
+                flag_wrong_format += 1
+                
+                msg = "ВНИМАНИЕ: Данные от радара имеют странный формат."
+                logger.debug(
+                    msg=msg
+                )
+                
+                # если слишком много сообщений подряд не подходят по формату
+                # сообщаем локальному серверу, чтобы он сообщил клиентам об этом
+                if flag_wrong_format >= 6 and not server_was_notified:
+                    
+                    server_was_notified = self.local_server_notification(
+                        error=True,
+                        url="http://localhost/FormatError",
+                    )
+                    was_incorrect_format = True
+            
+            # если сообщения стали опять правильного формата
+            elif match and was_incorrect_format:
+                logger.debug(
+                    "Сообщения снова правильного формата."
+                )
+                
+                # оповещаем об этом сервер
+                self.local_server_notification(
+                    error=False,
+                    url="http://localhost/FormatError",
+                )
+                was_incorrect_format = False
+                
+            # отсекаем ненужную часть, оставляем только города
             main_info_end = el.text.find("❗️")
             main_info_process.append(el.text[:main_info_end])
     
@@ -153,17 +216,20 @@ class DataAggregationService():
                 ensure_ascii=False,
                 indent=4,
             )
-                
-        print("process_radar_data успешно отработала.")
+        
+        logger.debug(
+            "process_radar_data успешно отработала."
+        )  
+
         
     
-    def radar_is_available(self, error: bool) -> bool:
+    def local_server_notification(self, url: str, error: bool) -> bool:
         """
         Функция безопасно делает запрос к локальному серверу.
         Обрабатывая ошибку, если сервер не работает, логирует данный факт.
         """
         try:
-            requests.post("http://localhost/GetDataError", params={"error": str(error)})
+            requests.post(url, params={"error": str(error)})
             
             # если удалось оповестить сервер о потере соединения с радар, вернем true
             return True
@@ -172,15 +238,17 @@ class DataAggregationService():
             
             # если не удалось оповестить сервер, вернем false 
             return False
+    
             
         
                        
 def main():
     service = DataAggregationService()
     
-    with requests.Session() as session:
-        data = service.get_radar_data(session)
-        service.process_radar_data(data)
+    while True:
+        with requests.Session() as session:
+            data = service.get_radar_data(session)
+            resp = service.process_radar_data(data)
         
             
         
