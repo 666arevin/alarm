@@ -5,10 +5,13 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
-from utils import *
 import json
 from logging.config import dictConfig
 import logging
+
+if __name__ == "__main__":
+    print(1)
+    from utils import *
 
 
 # основная папка
@@ -85,6 +88,9 @@ class DataAggregationService():
                 # возвращает не обработанный html
                 main_body = response.text
                 
+                with open(DATA_FOLDER / "radar_data_raw.html", mode="w", encoding="utf-8") as f:
+                    f.write(main_body)
+                
                 logger.debug(
                     "get_radar_data успешно отработала."
                 )                    
@@ -119,7 +125,7 @@ class DataAggregationService():
                     
             
             
-    def process_radar_data(self, data: str) -> DataAggregationService | None:
+    def process_radar_data(self, data: str, collect_data: bool = False):
         """_summary_
 
         Args:
@@ -128,13 +134,6 @@ class DataAggregationService():
         Returns:
             DataAggregationService | None: _description_
         """
-        # флаг максимального количество сообщений с неправильным форматом
-        flag_wrong_format = 0
-        was_incorrect_format = False
-        
-        # флаг был ли оповещен сервер о проблемах с форматом
-        server_was_notified = False
-        
         # основные массивы для сбора информации из html
         main_info_process = list()
         date_time_process = list()
@@ -142,50 +141,27 @@ class DataAggregationService():
         soup = BeautifulSoup(markup=data, features="html.parser")
 
         # получаем основную инфомрацию из сообщения и обрабатываем
-        main_info = soup.find_all("div", attrs={"class": "tgme_widget_message_text"})
-        
-        for el in main_info:
+        messages = soup.find_all("div", attrs={"class": "tgme_widget_message_text"})
             
-            # проверяем формат
-            match = re.search(
-                r"❗️Радар по всей России",
-                el.text,
+        # проходимся по всем найденным сообщениям
+        for mes in messages:
+            str_div = str(mes)
+            
+            # находим где начинается нужная часть чообщения, 
+            start_id = re.search(
+                r"[а-яА-яЁё]", str_div
+            ).span()[0] # .span() находяться 2 значения, [0] индекс начала
+            
+            end_id = str_div.find("<br/><br/>")
+            
+            # приводим контент к нужно виду
+            content = re.sub(
+                r"\s?<br/>\s?",
+                string=str_div[start_id:end_id],
+                repl=", "
             )
             
-            if not match:
-                flag_wrong_format += 1
-                
-                msg = "ВНИМАНИЕ: Данные от радара имеют странный формат."
-                logger.debug(
-                    msg=msg
-                )
-                
-                # если слишком много сообщений подряд не подходят по формату
-                # сообщаем локальному серверу, чтобы он сообщил клиентам об этом
-                if flag_wrong_format >= 6 and not server_was_notified:
-                    
-                    server_was_notified = self.local_server_notification(
-                        error=True,
-                        url="http://localhost/FormatError",
-                    )
-                    was_incorrect_format = True
-            
-            # если сообщения стали опять правильного формата
-            elif match and was_incorrect_format:
-                logger.debug(
-                    "Сообщения снова правильного формата."
-                )
-                
-                # оповещаем об этом сервер
-                self.local_server_notification(
-                    error=False,
-                    url="http://localhost/FormatError",
-                )
-                was_incorrect_format = False
-                
-            # отсекаем ненужную часть, оставляем только города
-            main_info_end = el.text.find("❗️")
-            main_info_process.append(el.text[:main_info_end])
+            main_info_process.append(content)
     
         # получаем информацию о просмтрах на сообщение и обрабатываем
         views = soup.find_all("span", attrs={"class": "tgme_widget_message_views"})
@@ -242,17 +218,17 @@ class DataAggregationService():
             
         
                        
-def main():
-    service = DataAggregationService()
+# def main():
+#     service = DataAggregationService()
     
-    while True:
-        with requests.Session() as session:
-            data = service.get_radar_data(session)
-            resp = service.process_radar_data(data)
+
+#     with requests.Session() as session:
+#         data = service.get_radar_data(session)
+#         resp = service.process_radar_data(data)
         
             
         
         
         
         
-main()
+# main()
