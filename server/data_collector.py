@@ -13,16 +13,14 @@ import time
 
 # основная папка
 BASE_DIR = Path(__file__).resolve().parent
-print(BASE_DIR) # /home/sto-ormik/programming/python/projects/alarm/server
 # тут лежат данные собранные из телеграмм канала
 DATA_FOLDER = BASE_DIR / "data"
 
 # добавляем корневую папку, чтобы не было проблем с импортом модулей из других папок
-print("добавленные пути- " + str(sys.path))
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
     
-from utils import *    
+from utils import * 
     
 
 # настраивавем логгер
@@ -76,11 +74,13 @@ class DataAggregationService():
         # флаг, определяющий, знает ли локальный сервер о проблемах с доступом
         # к радару. Изначально сервер ничего не знает, пожтому False
         server_was_notified = False
+
+        notified = False
         
         while True:
             try:
                 # получаем основные данные
-                response = session.get("https://t.me/s/radarrussiia", timeout=5)
+                response = session.get("https://t.me/s/radarrussiia", timeout=6)
                 
                 # если мы получили ответ от радара, сообщаем серверу если нужно
                 # что подключение восстановленно
@@ -89,7 +89,18 @@ class DataAggregationService():
                     server_was_notified = self.local_server_notification(
                         error=False,
                         url="http://localhost/GetDataError",
+                        msg="ВНИМАНИЕ: локальный сервер не запущен. Доступ к радар восстановлен.",
+                        log=notified
                     )
+                    # спец флаг, что не нужно больше логировать одну и ту же проблему
+                    notified = True
+
+                    # если удалось оповестить сервер, ошибка закрыта
+                    if server_was_notified:
+                        was_mistake = False
+                        # также меняем флаг на False, при следующей проблеме с подключением
+                        # и последующим восстановлением первый случай логировался
+                        notified = False
                     
                 # возвращает не обработанный html
                 main_body = response.text
@@ -115,16 +126,18 @@ class DataAggregationService():
                     server_was_notified = self.local_server_notification(
                         error=True,
                         url="http://localhost/GetDataError",
+                        msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар.",
+                        log=was_mistake
                     )
                     was_mistake = True
                 
                 # логируем ошибки
-                if flag_connection_error >= 4:
+                if flag_connection_error == 4:
                     logger.error(
                         "ВНИМАНИЕ: Превышенно количество попыток подкючения к серверу."
                     )
                     
-                else:
+                elif flag_connection_error < 4:
                     logger.warning(
                         "Программа не смогла получить ответ от радара."
                     )
@@ -213,7 +226,7 @@ class DataAggregationService():
 
         
     
-    def local_server_notification(self, url: str, error: bool) -> bool:
+    def local_server_notification(self, url: str, error: bool, msg: str, log: bool) -> bool:
         """
         Функция безопасно делает запрос к локальному серверу.
         Обрабатывая ошибку, если сервер не работает, логирует данный факт.
@@ -224,7 +237,8 @@ class DataAggregationService():
             # если удалось оповестить сервер о потере соединения с радар, вернем true
             return True
         except RequestException:
-            logger.critical(f"ВНИМАНИЕ: локальный сервер не запущен.")
+            if not log:
+                logger.critical(msg)
             
             # если не удалось оповестить сервер, вернем false 
             return False
@@ -235,16 +249,17 @@ class DataAggregationService():
 def main():
     service = DataAggregationService()
 
-    # создаем сессию подключения
-    with requests.Session() as session:
+    while True:
+        # создаем сессию подключения
+        with requests.Session() as session:
 
-        # получаем данные от радара
-        data = service.get_radar_data(session)
+            # получаем данные от радара
+            data = service.get_radar_data(session)
 
-        # обрабатываем данные и сохраняем их
-        service.process_radar_data(data)
+            # обрабатываем данные и сохраняем их
+            service.process_radar_data(data)
 
-        # ждем 1 минуту перед следующем запросом
-        time.sleep(60)
+            # ждем 1 минуту перед следующем запросом
+            time.sleep(60)
 
 main()
