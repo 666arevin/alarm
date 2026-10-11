@@ -8,16 +8,21 @@ from datetime import datetime, timedelta, timezone
 import json
 from logging.config import dictConfig
 import logging
-
-if __name__ == "__main__":
-    print(1)
-    from utils import *
-
+import sys
 
 # основная папка
 BASE_DIR = Path(__file__).resolve().parent
+print(BASE_DIR) # /home/sto-ormik/programming/python/projects/alarm/server
 # тут лежат данные собранные из телеграмм канала
 DATA_FOLDER = BASE_DIR / "data"
+
+# добавляем корневую папку, чтобы не было проблем с импортом модулей из других папок
+print("добавленные пути- " + str(sys.path))
+if str(BASE_DIR) not in sys.path:
+    sys.path.append(str(BASE_DIR))
+    
+from utils import *    
+    
 
 # настраивавем логгер
 with open(DATA_FOLDER / "log_settings.jsonc", mode="r", encoding="utf-8") as f:
@@ -152,9 +157,10 @@ class DataAggregationService():
                 r"[а-яА-яЁё]", str_div
             ).span()[0] # .span() находяться 2 значения, [0] индекс начала
             
+            # находим конец нужной части
             end_id = str_div.find("<br/><br/>")
             
-            # приводим контент к нужно виду
+            # приводим контент к нужному виду
             content = re.sub(
                 r"\s?<br/>\s?",
                 string=str_div[start_id:end_id],
@@ -185,13 +191,9 @@ class DataAggregationService():
         )
             
         # созраняем данные
-        with open(DATA_FOLDER / "radar_data_proc.json", mode="w", encoding="utf-8") as f:
-            json.dump(
-                processed_data,
-                f,
-                ensure_ascii=False,
-                indent=4,
-            )
+        rotating_save_json(
+            
+        )
         
         logger.debug(
             "process_radar_data успешно отработала."
