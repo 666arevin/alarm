@@ -9,6 +9,7 @@ import json
 from logging.config import dictConfig
 import logging
 import sys
+import time
 
 # основная папка
 BASE_DIR = Path(__file__).resolve().parent
@@ -130,7 +131,7 @@ class DataAggregationService():
                     
             
             
-    def process_radar_data(self, data: str, collect_data: bool = False):
+    def process_radar_data(self, data: str, collect_data: bool = False) -> None:
         """_summary_
 
         Args:
@@ -152,7 +153,7 @@ class DataAggregationService():
         for mes in messages:
             str_div = str(mes)
             
-            # находим где начинается нужная часть чообщения, 
+            # находим где начинается нужная часть сообщения, 
             start_id = re.search(
                 r"[а-яА-яЁё]", str_div
             ).span()[0] # .span() находяться 2 значения, [0] индекс начала
@@ -190,10 +191,21 @@ class DataAggregationService():
             views_count=views,
         )
             
-        # созраняем данные
-        rotating_save_json(
+        # если все отработало корректно, созраняем словарь
+        if isinstance(processed_data, dict):
             
-        )
+            rotating_save_json(
+                data=processed_data,
+                f_path=DATA_FOLDER / "radar_data_proc.json",
+                maxBytes=10 * 1024 * 1024,
+                BackupCount=10
+            )
+
+        # если при сборе словаря произошла ошибка
+        else:
+            logger.critical(
+                msg="ВНИМАНИЕ: данные не были сохранены."
+            )
         
         logger.debug(
             "process_radar_data успешно отработала."
@@ -220,17 +232,19 @@ class DataAggregationService():
             
         
                        
-# def main():
-#     service = DataAggregationService()
-    
+def main():
+    service = DataAggregationService()
 
-#     with requests.Session() as session:
-#         data = service.get_radar_data(session)
-#         resp = service.process_radar_data(data)
-        
-            
-        
-        
-        
-        
-# main()
+    # создаем сессию подключения
+    with requests.Session() as session:
+
+        # получаем данные от радара
+        data = service.get_radar_data(session)
+
+        # обрабатываем данные и сохраняем их
+        service.process_radar_data(data)
+
+        # ждем 1 минуту перед следующем запросом
+        time.sleep(60)
+
+main()
