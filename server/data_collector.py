@@ -87,8 +87,8 @@ class DataAggregationService():
                 if response.status_code == 200 and was_mistake:
                     
                     server_was_notified = self.local_server_notification(
-                        error=False,
-                        url="http://localhost/GetDataError",
+                        data=False,
+                        url="http://localhost:9678/alarm/v1/GetDataError",
                         msg="ВНИМАНИЕ: локальный сервер не запущен. Доступ к радар восстановлен.",
                         log=notified
                     )
@@ -105,8 +105,6 @@ class DataAggregationService():
                 # возвращает не обработанный html
                 main_body = response.text
                 
-                with open(DATA_FOLDER / "radar_data_raw.html", mode="w", encoding="utf-8") as f:
-                    f.write(main_body)
                 
                 logger.debug(
                     "get_radar_data успешно отработала."
@@ -124,8 +122,8 @@ class DataAggregationService():
                     # отправляем локальному серверу Flask информацию об ошибке 
                     # при этом продолжаем попытки достучаться до радара
                     server_was_notified = self.local_server_notification(
-                        error=True,
-                        url="http://localhost/GetDataError",
+                        data=True,
+                        url="http://localhost:9678/alarm/v1/GetDataError",
                         msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар.",
                         log=was_mistake
                     )
@@ -134,7 +132,7 @@ class DataAggregationService():
                 # логируем ошибки
                 if flag_connection_error == 4:
                     logger.error(
-                        "ВНИМАНИЕ: Превышенно количество попыток подкючения к серверу."
+                        "ВНИМАНИЕ: Превышенно количество попыток подкючения к радару."
                     )
                     
                 elif flag_connection_error < 4:
@@ -204,14 +202,22 @@ class DataAggregationService():
             views_count=views,
         )
             
-        # если все отработало корректно, созраняем словарь
+        # если все отработало корректно, сохраняем словарь
         if isinstance(processed_data, dict):
             
-            rotating_save_json(
+            newest_message_time = rotating_save_json(
                 data=processed_data,
                 f_path=DATA_FOLDER / "radar_data_proc.json",
                 maxBytes=10 * 1024 * 1024,
                 BackupCount=10
+            )
+
+            # отправляем на сервер время последнего сообщения
+            self.local_server_notification(
+                data=newest_message_time,
+                url="http://localhost:9678/alarm/v1/NewData",
+                msg="ВНИМАНИЕ: локальный сервер не запущен. Могли появиться новые данные.",
+                log=False
             )
 
         # если при сборе словаря произошла ошибка
@@ -226,13 +232,13 @@ class DataAggregationService():
 
         
     
-    def local_server_notification(self, url: str, error: bool, msg: str, log: bool) -> bool:
+    def local_server_notification(self, url: str, data: bool | str, msg: str, log: bool) -> bool:
         """
         Функция безопасно делает запрос к локальному серверу.
         Обрабатывая ошибку, если сервер не работает, логирует данный факт.
         """
         try:
-            requests.post(url, params={"error": str(error)})
+            requests.post(url, params={"data": str(data)})
             
             # если удалось оповестить сервер о потере соединения с радар, вернем true
             return True

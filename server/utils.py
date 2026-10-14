@@ -1,8 +1,7 @@
 import logging
 from typing import Literal
-import sys
 from os import path
-import os
+import time
 from pathlib import Path
 import json
 import re
@@ -11,6 +10,30 @@ from datetime import datetime, timedelta
 # логгер
 logger = logging.getLogger()
 
+class TooManyRetriersOpenFile(Exception):
+    pass
+
+def json_upload_safely(file: str | Path, data: dict) -> None:
+
+    """Функция безопасной записи и сохранения данных в json файл.
+       Функция сначала запишет данные в temp файл, а потом переименует его в основной файл.
+
+    Args:
+        file (str | Path): Файл в который нужно сохранить данные.
+        data (dict): Данные которые нужно сохранить в json файл.
+
+    Returns:
+        None: _description_
+    """
+    # путь к временному файлу
+    temp_file = Path(file).parent / "temp"
+
+    # сохраняем данные в временный файл
+    with open(temp_file, mode="w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+    # переименовываем временный файл в основной
+    temp_file.rename(file)
 
 def process_data(keys: list, **kwargs) -> dict | Literal[1]:
     """Обрабатывает клуючи и значения (не ограчниенное количество),
@@ -51,13 +74,13 @@ def process_data(keys: list, **kwargs) -> dict | Literal[1]:
     
     return result
 
-
 def rotating_save_json(
     data: dict, 
     f_path: str | Path,
     maxBytes: int = None, 
     BackupCount: int = None, 
-) -> None:
+) -> str:
+    
     """Функция умеет записывать данные в json файл с функцией ротации.
     Если размер файла привысит maxBytes создасться новый файл а старые данные 
     уйдут в архив но будут доступна.
@@ -67,9 +90,13 @@ def rotating_save_json(
         f_path (str | Path): файл в который нужно сохранить данные
         maxBytes (int, optional): максимальный размер файла в байтах, после ротация. Defaults to None.
         BackupCount (int, optional): количество резервных копий, после удаление. Defaults to None.
+    
+    Return:
+        str: возвразает время строкой в формате iso для последнего сообщения.
     """
-    # текущие время
+    # текущие время в формате iso
     current_time = datetime.now().astimezone()
+    last_1hour = (current_time - timedelta(minutes=60)).isoformat()
     
     # проверяем что файл существует, создаем его если нужно
     f_path = Path(f_path)
@@ -109,19 +136,16 @@ def rotating_save_json(
         with open(f_path, mode="r", encoding="utf-8") as f:
             radar_data: dict = json.load(f)
         
-        # делаем отдельный список с ключами 
-        mes_time_list = list(radar_data.keys()).copy()
+
+        # собираем только отфильтрованные данные (сообщения за последние 30 минут)
+        filtered_radar_data = {
+            key: value 
+            for key, value in radar_data.items()
+            if key >= last_1hour
+        }
         
-        for key in mes_time_list:
-            time = datetime.fromisoformat(key)
-           
-            # если сообщение позже 15 минут
-            if current_time - timedelta(minutes=15) > time:
-                radar_data.pop(key)
-        
-        # сохраняе очищенный словарик
-        with open(f_path, mode="w", encoding="utf-8") as f:
-            json.dump(radar_data, f, indent=4, ensure_ascii=False)
+        # сохраняем отфильтрованный словарик
+        json_upload_safely(data=filtered_radar_data, file=f_path)
                
         
     # после всех проверок объединяем страые данные с новыми и сохраняем в файл
@@ -129,18 +153,31 @@ def rotating_save_json(
         loaded_data = json.load(f)
     
     # обьединяем 
-    for key, value in data.items():
-        loaded_data[key] = value
-    
+    loaded_data |= data
+    newest_message_time = max(loaded_data)
+
     # сохраняем
-    with open(f_path, mode="w", encoding="utf-8") as f:
-        json.dump(loaded_data, f, ensure_ascii=False, indent=4)
-        
+    json_upload_safely(data=loaded_data, file=f_path)
+
     logger.info(
         f"функция rotating_save_json: Данные успешно сохранены в файл {f_path}."
     )
+
+    return newest_message_time
         
-            
+
+def str_to_bool(s: str) -> bool:
+    """Преобразует строку в булево значение.
+
+    Args:
+        s (str): строка для преобразования
+
+    Returns:
+        bool: True или False
+    """
+    return s.lower() == "true"
+
+
 # rotating_save_json(
 #     {"test": "data"},
 #     "/home/sto-ormik/programming/python/projects/alarm/server/data/radar_data_proc.json",
