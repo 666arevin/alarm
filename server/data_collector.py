@@ -21,6 +21,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
     
 from utils import * 
+from alarm_exception import *
     
 
 # настраивавем логгер
@@ -36,12 +37,6 @@ logger = logging.getLogger()
 
 
 
-class ServerErrorGetData(Exception):
-    def __init__(self, message: str):
-        super().__init__(message)
-        
-        self.status_code = 404       
-
 class FormatDataError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
@@ -49,10 +44,13 @@ class FormatDataError(Exception):
 
 class DataAggregationService():
     def __init__(self):
-        pass
+
+        self.was_mistake = False
+
+        self.was_server_notified = False
         
     
-    def get_radar_data(self, session: Session) -> str:
+    def get_radar_data(self, session: Session, try_count: int) -> str:
         """Данная функция очень насойчиво пытается получить данные от радара.
         Она не завершит свою работу пока их не получит.
 
@@ -62,84 +60,100 @@ class DataAggregationService():
         Returns:
             str: основная html страница сайта радар.
         """
-            
-        flag_connection_error = 0
-        
-        # спец флаг, которые определяет, нужно ли сообщать серверу Flask
-        # что подключение было восстановлено
-        # False - подключение не было потеряно, сообщать не нужно
-        # True - ранее были пробелемы с подключенем
-        was_mistake = False
-        
-        # флаг, определяющий, знает ли локальный сервер о проблемах с доступом
-        # к радару. Изначально сервер ничего не знает, пожтому False
-        server_was_notified = False
+        try:
+            # получаем основные данные
+            response = session.get("https://t.me/s/radarrussiia", timeout=6)
 
-        notified = False
+            if response.status_code == 200: 
+                # возвращает не обработанный html
+                main_body = response.text    
+
+                with open(DATA_FOLDER / "radar_data_raw.html", mode="w", encoding="utf-8") as f:
+                    f.write(main_body)
+
+                return main_body
         
-        while True:
-            try:
-                # получаем основные данные
-                response = session.get("https://t.me/s/radarrussiia", timeout=6)
+        # если произошла любая ошибка, из за которой не получили новые данные
+        except RequestException:
+                        
+            # если ошибок стало 4 и более
+            if try_count >= 4:
+                raise RadarErrorGetDataMaxRetriers
                 
-                # если мы получили ответ от радара, сообщаем серверу если нужно
-                # что подключение восстановленно
-                if response.status_code == 200 and was_mistake:
-                    
-                    server_was_notified = self.local_server_notification(
+            elif try_count < 4:
+                raise RadarErrorGetData
+
+            
+
+    def fetch_with_retries(self, session: Session):
+
+        attempt = 0
+        # запускаем цикл, который не закончиться пока не получим данные от радара
+        while True:
+            attempt +=1
+            try:
+                # получаем данные от радара
+                data = self.get_radar_data(
+                    session=session,
+                    try_count=attempt,
+                )
+
+                # оповещаем что подключение восстановленно
+                if self.was_mistake:
+                    self.was_server_notified = self.local_server_notification(
                         data=False,
                         url="http://localhost:9678/alarm/v1/GetDataError",
-                        msg="ВНИМАНИЕ: локальный сервер не запущен. Доступ к радар восстановлен.",
-                        log=notified
                     )
-                    # спец флаг, что не нужно больше логировать одну и ту же проблему
-                    notified = True
 
-                    # если удалось оповестить сервер, ошибка закрыта
-                    if server_was_notified:
-                        was_mistake = False
-                        # также меняем флаг на False, при следующей проблеме с подключением
-                        # и последующим восстановлением первый случай логировался
-                        notified = False
-                    
-                # возвращает не обработанный html
-                main_body = response.text
-                
-                
+                    # если удалось оповестить сервер
+                    if self.was_server_notified:
+                        self.was_mistake = False
+
+                    # если не удалось оповестить сервер
+                    else:
+                        logger.critical(
+                            msg="ВНИМАНИЕ: локальный сервер не запущен. Доступ к радар восстановлен."
+                        )
+
+                # логируем если все успешно
                 logger.debug(
-                    "get_radar_data успешно отработала."
-                )                    
+                    msg="get_radar_data успешно отработала."
+                )    
+
+                return data
+
+            except RadarErrorGetData:
+                logger.warning(
+                    msg=f"Не получилось получить данные от радара. Попытка -> {attempt}"
+                )
+
+            except RadarErrorGetDataMaxRetriers:
+
+                # логируем 4 попытку
+                if attempt % 10 == 0 or attempt == 4:
                     
-                return main_body
-            
-            # если произошла любая ошибка, из за которй не получили новые данные
-            except RequestException:
-                flag_connection_error += 1
-                
-                # если ошибка повторяется
-                if flag_connection_error >= 4 and not server_was_notified:
-                    
-                    # отправляем локальному серверу Flask информацию об ошибке 
-                    # при этом продолжаем попытки достучаться до радара
-                    server_was_notified = self.local_server_notification(
+                    logger.critical(
+                        msg=f"ВНИМАНИЕ: Превышенно количество попыток подкючения к серверу. Попытка -> {attempt}"
+                    )
+
+                # если сервер еще не оповещен об ошибке
+                if not self.was_server_notified:
+
+                    self.was_server_notified = self.local_server_notification(
                         data=True,
                         url="http://localhost:9678/alarm/v1/GetDataError",
-                        msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар.",
-                        log=was_mistake
                     )
-                    was_mistake = True
-                
-                # логируем ошибки
-                if flag_connection_error == 4:
-                    logger.error(
-                        "ВНИМАНИЕ: Превышенно количество попыток подкючения к радару."
-                    )
-                    
-                elif flag_connection_error < 4:
-                    logger.warning(
-                        "Программа не смогла получить ответ от радара."
-                    )
-                    
+
+                    # если мы сервер знает об ошибке, меняем флаг
+                    if self.was_server_notified:
+                        self.was_mistake = True
+
+                    # если не удалось оповестить сервер
+                    else:
+                        logger.critical(
+                            msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар."
+                        )
+     
             
             
     def process_radar_data(self, data: str, collect_data: bool = False) -> None:
@@ -158,7 +172,7 @@ class DataAggregationService():
         soup = BeautifulSoup(markup=data, features="html.parser")
 
         # получаем основную инфомрацию из сообщения и обрабатываем
-        messages = soup.find_all("div", attrs={"class": "tgme_widget_message_text"})
+        messages = soup.find_all("div", attrs={"class": "tgme_widget_message_text js-message_text"})
             
         # проходимся по всем найденным сообщениям
         for mes in messages:
@@ -213,12 +227,14 @@ class DataAggregationService():
             )
 
             # отправляем на сервер время последнего сообщения
-            self.local_server_notification(
+            successfully = self.local_server_notification(
                 data=newest_message_time,
                 url="http://localhost:9678/alarm/v1/NewData",
-                msg="ВНИМАНИЕ: локальный сервер не запущен. Могли появиться новые данные.",
-                log=False
             )
+            if not successfully:
+                logger.critical(
+                    msg="Произошла ошибка при отправке времени последнего сообщения."
+                )
 
         # если при сборе словаря произошла ошибка
         else:
@@ -232,7 +248,7 @@ class DataAggregationService():
 
         
     
-    def local_server_notification(self, url: str, data: bool | str, msg: str, log: bool) -> bool:
+    def local_server_notification(self, url: str, data: bool | str) -> bool:
         """
         Функция безопасно делает запрос к локальному серверу.
         Обрабатывая ошибку, если сервер не работает, логирует данный факт.
@@ -243,8 +259,6 @@ class DataAggregationService():
             # если удалось оповестить сервер о потере соединения с радар, вернем true
             return True
         except RequestException:
-            if not log:
-                logger.critical(msg)
             
             # если не удалось оповестить сервер, вернем false 
             return False
@@ -259,8 +273,8 @@ def main():
         # создаем сессию подключения
         with requests.Session() as session:
 
-            # получаем данные от радара
-            data = service.get_radar_data(session)
+            data = service.fetch_with_retries(session=session)
+
 
             # обрабатываем данные и сохраняем их
             service.process_radar_data(data)
