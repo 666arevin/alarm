@@ -10,6 +10,7 @@ from logging.config import dictConfig
 import logging
 import sys
 import time
+from threading import Thread
 
 # основная папка
 BASE_DIR = Path(__file__).resolve().parent
@@ -44,10 +45,7 @@ class FormatDataError(Exception):
 
 class DataAggregationService():
     def __init__(self):
-
-        self.was_mistake = False
-
-        self.was_server_notified = False
+        pass
         
     
     def get_radar_data(self, session: Session, try_count: int) -> str:
@@ -84,8 +82,104 @@ class DataAggregationService():
                 raise RadarErrorGetData
 
             
+            
+    def process_radar_data(self, data: str) -> dict:
+        """_summary_
+
+        Args:
+            data (str): _description_
+
+        Returns:
+            DataAggregationService | None: _description_
+        """
+        # основные массивы для сбора информации из html
+        main_info_process = list()
+        date_time_process = list()
+
+        soup = BeautifulSoup(markup=data, features="html.parser")
+
+        # получаем основную инфомрацию из сообщения
+        messages = soup.find_all("div", attrs={"class": "tgme_widget_message_text js-message_text"})
+        views = soup.find_all("span", attrs={"class": "tgme_widget_message_views"})
+        date_time = soup.find_all("time", attrs={"class": "time"})
+
+        # проверка, получили ли данные
+        if [] in (messages, views, date_time):
+            raise DataParseFailed
+            
+        # проходимся по всем найденным сообщениям
+        for mes in messages:
+            str_div = str(mes)
+            
+            # находим где начинается нужная часть сообщения, 
+            start_id = re.search(
+                r"[а-яА-яЁё]", str_div
+            ).span()[0] # .span() находяться 2 значения, [0] индекс начала
+            
+            # находим конец нужной части
+            end_id = str_div.find("<br/><br/>")
+            
+            # приводим контент к нужному виду
+            content = re.sub(
+                r"\s?<br/>\s?",
+                string=str_div[start_id:end_id],
+                repl=", "
+            )
+            
+            main_info_process.append(content)
+    
+        # обрабатываем информацию о просмотрах
+        views = [i.text for i in views]
+
+        # обрабатываем информацию о времени сообщения
+
+        # обрабатываем данные о времени и дате. Приводим к часовому поясу Москвы.
+        for t in date_time:
+            dt = datetime.fromisoformat(t.get("datetime"))
+            dt_shifted = dt.astimezone(timezone(timedelta(hours=3)))
+            
+            date_time_process.append(dt_shifted.isoformat())
+        
+        # все получившиеся списки склеиваем в один словарь
+        processed_data = process_data(
+            date_time_process,
+            message_data=main_info_process,
+            views_count=views,
+        )
+
+        return processed_data
+
+        
+    def local_server_notification(self, url: str, data: bool | str = "") -> bool:
+        """
+        Функция безопасно делает запрос к локальному серверу.
+        Обрабатывая ошибку, если сервер не работает, логирует данный факт.
+        """
+        try:
+            requests.post(url, params={"data": str(data)})
+            
+            # если удалось оповестить сервер о потере соединения с радар, вернем true
+            return True
+        except RequestException:
+            
+            # если не удалось оповестить сервер, вернем false 
+            return False
+
+
+class RadarPipelineCoordinator:
+    def __init__(self):
+        self.service = DataAggregationService()
+
+        self.was_mistake = False
+
+        self.was_server_notified = False
+
+
 
     def fetch_with_retries(self, session: Session):
+
+        # убираем self для более лаконичной записи
+        service = self.service
 
         attempt = 0
         # запускаем цикл, который не закончиться пока не получим данные от радара
@@ -93,14 +187,14 @@ class DataAggregationService():
             attempt +=1
             try:
                 # получаем данные от радара
-                data = self.get_radar_data(
+                data = service.get_radar_data(
                     session=session,
                     try_count=attempt,
                 )
 
                 # оповещаем что подключение восстановленно
                 if self.was_mistake:
-                    self.was_server_notified = self.local_server_notification(
+                    self.was_server_notified = service.local_server_notification(
                         data=False,
                         url="http://localhost:9678/alarm/v1/GetDataError",
                     )
@@ -139,7 +233,7 @@ class DataAggregationService():
                 # если сервер еще не оповещен об ошибке
                 if not self.was_server_notified:
 
-                    self.was_server_notified = self.local_server_notification(
+                    self.was_server_notified = service.local_server_notification(
                         data=True,
                         url="http://localhost:9678/alarm/v1/GetDataError",
                     )
@@ -153,131 +247,78 @@ class DataAggregationService():
                         logger.critical(
                             msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар."
                         )
-     
-            
-            
-    def process_radar_data(self, data: str, collect_data: bool = False) -> None:
-        """_summary_
 
-        Args:
-            data (str): _description_
+    def manage_data_flow(self, data: dict):
+        service = self.service
 
-        Returns:
-            DataAggregationService | None: _description_
-        """
-        # основные массивы для сбора информации из html
-        main_info_process = list()
-        date_time_process = list()
+        try:
+            processed_data = service.process_radar_data(data)
 
-        soup = BeautifulSoup(markup=data, features="html.parser")
-
-        # получаем основную инфомрацию из сообщения и обрабатываем
-        messages = soup.find_all("div", attrs={"class": "tgme_widget_message_text js-message_text"})
-            
-        # проходимся по всем найденным сообщениям
-        for mes in messages:
-            str_div = str(mes)
-            
-            # находим где начинается нужная часть сообщения, 
-            start_id = re.search(
-                r"[а-яА-яЁё]", str_div
-            ).span()[0] # .span() находяться 2 значения, [0] индекс начала
-            
-            # находим конец нужной части
-            end_id = str_div.find("<br/><br/>")
-            
-            # приводим контент к нужному виду
-            content = re.sub(
-                r"\s?<br/>\s?",
-                string=str_div[start_id:end_id],
-                repl=", "
-            )
-            
-            main_info_process.append(content)
-    
-        # получаем информацию о просмтрах на сообщение и обрабатываем
-        views = soup.find_all("span", attrs={"class": "tgme_widget_message_views"})
-        views = [i.text for i in views]
-
-        # получаем информацию о времени сообщения
-        date_time = soup.find_all("time", attrs={"class": "time"})
-
-        # обрабатываем данные о времени и дате. Приводим к часовому поясу Москвы.
-        for t in date_time:
-            dt = datetime.fromisoformat(t.get("datetime"))
-            dt_shifted = dt.astimezone(timezone(timedelta(hours=3)))
-            
-            date_time_process.append(dt_shifted.isoformat())
-        
-        # все получившиеся списки склеиваем в один словарь
-        processed_data = process_data(
-            date_time_process,
-            message_data=main_info_process,
-            views_count=views,
-        )
-            
-        # если все отработало корректно, сохраняем словарь
-        if isinstance(processed_data, dict):
-            
+            # сохраняем полученные данные
             newest_message_time = rotating_save_json(
                 data=processed_data,
                 f_path=DATA_FOLDER / "radar_data_proc.json",
                 maxBytes=10 * 1024 * 1024,
-                BackupCount=10
+                BackupCount=10,
             )
 
-            # отправляем на сервер время последнего сообщения
-            successfully = self.local_server_notification(
+             # отправляем на сервер время последнего сообщения
+            successfully = service.local_server_notification(
                 data=newest_message_time,
                 url="http://localhost:9678/alarm/v1/NewData",
             )
+
             if not successfully:
                 logger.critical(
                     msg="Произошла ошибка при отправке времени последнего сообщения."
                 )
 
-        # если при сборе словаря произошла ошибка
-        else:
+        # ошибка когда количество ключей и значений разное
+        except DifferentLenghts:
+            msg = "ВНИМАНИЕ: дальнешая обработка данных невозможна. Количество ключей и значений разное."
             logger.critical(
-                msg="ВНИМАНИЕ: данные не были сохранены."
+                msg=msg
             )
-        
-        logger.debug(
-            "process_radar_data успешно отработала."
-        )  
 
-        
-    
-    def local_server_notification(self, url: str, data: bool | str) -> bool:
-        """
-        Функция безопасно делает запрос к локальному серверу.
-        Обрабатывая ошибку, если сервер не работает, логирует данный факт.
-        """
-        try:
-            requests.post(url, params={"data": str(data)})
-            
-            # если удалось оповестить сервер о потере соединения с радар, вернем true
-            return True
-        except RequestException:
-            
-            # если не удалось оповестить сервер, вернем false 
-            return False
-    
-            
-        
+        except DataParseFailed:
+            msg = "ВНИМАНИЕ: не удалось извлечь даныне из html."
+            logger.critical(
+                msg=msg
+            )
+
+        # если ошибок не было выводим сообщение об успехе
+        else:
+            logger.debug(
+                "process_radar_data успешно отработала."
+            )  
+
+
+def data_collector_heartbeat():
+    service = DataAggregationService()
+
+    while True:
+        service.local_server_notification(
+            "http://localhost:9678/alarm/v1/IsAlive",
+        )
+
+        time.sleep(60)
+
+th = Thread(target=data_collector_heartbeat, daemon=True)
+th.start()
+
                        
 def main():
-    service = DataAggregationService()
+    manager = RadarPipelineCoordinator()
 
     while True:
         # создаем сессию подключения
         with requests.Session() as session:
 
-            data = service.fetch_with_retries(session=session)
+            data = manager.fetch_with_retries(session=session)
 
 
             # обрабатываем данные и сохраняем их
-            service.process_radar_data(data)
+            manager.manage_data_flow(data)
 
             # ждем 1 минуту перед следующем запросом
             time.sleep(60)

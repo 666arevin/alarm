@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import re
 from datetime import datetime, timedelta
+from alarm_exception import DifferentLenghts
 
 # логгер
 logger = logging.getLogger()
@@ -35,6 +36,7 @@ def json_upload_safely(file: str | Path, data: dict) -> None:
     # переименовываем временный файл в основной
     temp_file.rename(file)
 
+
 def process_data(keys: list, **kwargs) -> dict | Literal[1]:
     """Обрабатывает клуючи и значения (не ограчниенное количество),
     создавая необходимую структуру словаря.
@@ -58,19 +60,15 @@ def process_data(keys: list, **kwargs) -> dict | Literal[1]:
     for key, values in kwargs.items():
         
         if len(keys) != len(values):
-            msg = "ВНИМАНИЕ: дальнешая обработка данных невозможна. Количество ключей и значений разное."
-            logger.critical(
-                msg=msg
-            )
-            return 1
-            
+
+            raise DifferentLenghts
         # создаем список из словарей для добавления в основной словарь как значения к датам
         for id, val in enumerate(values, start=0):
             dict_list_values[id][key] = val
+
     
     # создаем окончательный словарик
-    for time, values in zip(keys, dict_list_values):
-        result[time] = values
+    result = dict(zip(keys, dict_list_values))
     
     return result
 
