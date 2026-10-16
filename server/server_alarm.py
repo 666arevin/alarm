@@ -182,7 +182,7 @@ def post_products():
 
     # жив ли сервер, и загрузили ли данные
     elif not cache.get("data_collector_alive") or not radar_data_cache:
-        msg = "The server is not ready to send data, or no data available"
+        msg = "The server is not running, or no data available"
         return msg, 202
 
 
@@ -196,10 +196,6 @@ def post_products():
         }
 
         return jsonify(filtered_data), 200
-
-
-
-
 
 
 if __name__ == "__main__":

@@ -1,16 +1,18 @@
 import subprocess
-import json
+import time
 from pathlib import Path
 import asyncio
 from asyncio.exceptions import TimeoutError
 import requests
-from requests.exceptions import ConnectionError, ReadTimeout
+from requests import Session, RequestException
 from aioconsole import ainput
 from bs4 import BeautifulSoup
 from utils import process_data
-from datetime import *
+from datetime import timedelta, datetime
 import re
+from re import Pattern
 
+# основная папка
 BASE_DIR = Path(__file__).resolve().parent
 RADAR_DATA_PATH = BASE_DIR / "radar_data"
 
@@ -22,71 +24,49 @@ class AlarmManager():
         self.meassage_error_format = "В канале изменился формат сообщений, может привести к неправильной работе."
 
         self.alarm_notifier = AlarmNotifier()
-        
-                    
-    
-    def process_radar_data(self):   
-        main_info_process = list()
-        date_time_process = list()
 
-        # открываем файл с html страницой
-        with open(RADAR_DATA_PATH / "radar.html", mode="r", encoding="utf-8") as f:
-            html = f.read()
-            
-        soup = BeautifulSoup(markup=html, features="html.parser")
+    def get_processed_data(self, last_message_time: str, session: Session, try_count: int = None):
 
-        # получаем основную инфомрацию из сообщения и обрабатываем
-        main_info = soup.find_all("div", attrs={"class": "tgme_widget_message_text"})
-        
-        for el in main_info:
-            match = re.search(
-                r"❗️Радар по всей России",
-                el.text,
-            )
-            if not match:
-                asyncio.run(
-                    self.alarm_notifier.alarm_active(
-                        mes=self.meassage_error_formatб
-                    )
-                )
-            
-            main_info_end = el.text.find("❗️")
-            print(el.text[:main_info_end] + " | " + str(main_info_end))
-            main_info_process.append(el.text[:main_info_end])
-            
-        
-        # получаем информацию о просмтрах на сообщение и обрабатываем
-        views = soup.find_all("span", attrs={"class": "tgme_widget_message_views"})
-        views = [i.text for i in views]
-
-        # получаем информацию о времени сообщения
-        date_time = soup.find_all("time", attrs={"class": "time"})
-
-        # обрабатываем данные о времени и дате. Приводим к часовому поясу Москвы.
-        for t in date_time:
-            dt = datetime.fromisoformat(t.get("datetime"))
-            dt_shifted = dt.astimezone(timezone(timedelta(hours=3)))
-            
-            date_time_process.append(dt_shifted.isoformat())
-            
-        processed_data = process_data(
-            date_time_process,
-            message_data=main_info_process,
-            views_count=views,
+        # try:
+        # получаем основные данные
+        response = session.post(
+            url="http://127.0.0.1:9678/alarm/v1/Products",
+            params={"last_message": last_message_time},
+            timeout=(3.05, 27),
         )
-            
-        # Собираем окончательный словарь
-        print(processed_data)
-        with open(RADAR_DATA_PATH / "radar_data_proc.json", mode="w", encoding="utf-8") as f:
-            json.dump(
-                processed_data,
-                f,
-                ensure_ascii=False,
-                indent=4,
-            )
-    
-    def pattern_search(self):
-        pass
+
+        if response.status_code == 200: 
+            # возвращает словарик
+            data = response.json()
+
+            print(data)
+
+            return data
+        
+        # если произошла любая ошибка, из за которой не получили новые данные
+        # except RequestException:
+                        
+        #     # если ошибок стало 4 и более
+        #     if try_count >= 4:
+        #         raise RadarErrorGetDataMaxRetriers
+                
+        #     elif try_count < 4:
+        #         raise RadarErrorGetData
+
+                    
+    def patter_search(self, data: dict, pattern: str | Pattern[str] = None):
+
+        re_expression = re.compile(r"\bжуковский\b", re.IGNORECASE)
+
+        is_matched = any(
+            re.search(re_expression, message.get("message_data"))
+            for message in data.values()
+        )
+
+
+        return is_matched
+
+        
 
 
 class AlarmNotifier():
@@ -133,7 +113,7 @@ class AlarmNotifier():
         
         return user_text
     
-    async def alarm_active(self, mes: str) -> int:
+    async def alarm_active(self) -> int:
         """Функция запускает систему оповещения, также выодит возможность для отмены.
         
 
@@ -141,7 +121,6 @@ class AlarmNotifier():
             int: 0 - полное отключение программы, 
                  1 - отключение сигнализации но продолжение наблюдения
         """
-        print(mes)
         
         task1 = asyncio.create_task(self.alarm())
         task2 = asyncio.create_task(self.alarm_deactiv())
@@ -170,14 +149,44 @@ class AlarmNotifier():
         
 
     
-obj = AlarmNotifier()
-obj2 = AlarmManager()
+async def main():
+    manager = AlarmManager()
 
-obj2.get_radar_data()
-obj2.process_radar_data()
-# res = obj2.get_radar_data()
+    alarm = AlarmNotifier()
 
-# asyncio.run(obj.alarm_active())
+    last_message_time = datetime.now().astimezone() - timedelta(minutes=15)
+
+    while True:
+        with requests.Session() as session:
+            try:
+                # получаем данные
+                data = manager.get_processed_data(
+                    last_message_time,
+                    session,
+                )
+
+                data["2026-10-16T23:10:52+03:00"] = {
+                    "message_data": "жуковский"
+                }
+
+                if data.values():
+                    last_message_time = max(
+                        m.get("message_data") for m in data.values()
+                    )
+
+                is_matched =  manager.patter_search(data)
+
+                print("Отработало")
+
+                if is_matched:
+                    await alarm.alarm_active()
+
+            except RequestException:
+                await alarm.alarm_active()
+
+        time.sleep(60)
+
+asyncio.run(main())
 
 
 

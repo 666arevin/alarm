@@ -66,8 +66,6 @@ class DataAggregationService():
                 # возвращает не обработанный html
                 main_body = response.text    
 
-                with open(DATA_FOLDER / "radar_data_raw.html", mode="w", encoding="utf-8") as f:
-                    f.write(main_body)
 
                 return main_body
         
