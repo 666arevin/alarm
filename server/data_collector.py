@@ -209,13 +209,6 @@ class RadarPipelineCoordinator:
                             msg="ВНИМАНИЕ: локальный сервер не запущен. Доступ к радар восстановлен."
                         )
 
-                # логируем если все успешно
-                logger.debug(
-                    msg="get_radar_data успешно отработала."
-                )    
-
-                return data
-
             except RadarErrorGetData:
                 logger.warning(
                     msg=f"Не получилось получить данные от радара. Попытка -> {attempt}"
@@ -247,6 +240,14 @@ class RadarPipelineCoordinator:
                         logger.critical(
                             msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар."
                         )
+
+            else:
+                # логируем если все успешно
+                logger.debug(
+                    msg="get_radar_data успешно отработала."
+                )
+
+                return data
 
     def manage_data_flow(self, data: dict):
         service = self.service
@@ -296,15 +297,11 @@ class RadarPipelineCoordinator:
 def data_collector_heartbeat():
     service = DataAggregationService()
 
-    while True:
-        service.local_server_notification(
-            "http://localhost:9678/alarm/v1/IsAlive",
-        )
+    service.local_server_notification(
+        "http://localhost:9678/alarm/v1/IsAlive",
+    )
 
-        time.sleep(60)
 
-th = Thread(target=data_collector_heartbeat, daemon=True)
-th.start()
 
                        
 def main():
@@ -314,11 +311,14 @@ def main():
         # создаем сессию подключения
         with requests.Session() as session:
 
+            # полчаем данные от радара
             data = manager.fetch_with_retries(session=session)
-
 
             # обрабатываем данные и сохраняем их
             manager.manage_data_flow(data)
+
+            # отправляем информацию на сервер что все работает
+            data_collector_heartbeat()
 
             # ждем 1 минуту перед следующем запросом
             time.sleep(60)

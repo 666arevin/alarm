@@ -23,30 +23,6 @@ class AlarmManager():
 
         self.alarm_notifier = AlarmNotifier()
         
-    def get_radar_data(self):
-        
-        flag_connection_error = 0
-        data = None
-        
-        while data == None:
-            try:
-                data = requests.request("get", "https://t.me/s/radarrussiia", timeout=5)
-                with open(RADAR_DATA_PATH / "radar.html", mode="w", encoding="utf-8") as f:
-                    f.write(data.text)
-                    
-                return 0
-
-            except ConnectionError, ReadTimeout:
-                print("Не удалось подключиться к радару.")
-                flag_connection_error += 1
-                
-                # если ошибка повторяется, вызываем тревогу
-                if flag_connection_error == 4:
-                    asyncio.run(
-                        self.alarm_notifier.alarm_active(
-                            mes=self.message_error_radar
-                        )
-                    )
                     
     
     def process_radar_data(self):   
