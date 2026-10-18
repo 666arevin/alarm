@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from pathlib import Path
 from datetime import datetime, timedelta
 import json
-from utils import str_to_bool
 from typing import Any
 import sys
 from flask_caching import Cache
@@ -18,6 +17,8 @@ DATA_DIR = BASE_DIR / "data"
 # добавляем основную директорию для корректного импорта
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+from utils import *
 
 # настраиваем приложение и его кэш
 app = Flask(__name__)
@@ -199,5 +200,8 @@ def post_products():
 
 
 if __name__ == "__main__":
-    app.run(port=9678, host="0.0.0.0")
+    debug_mode = get_debug_mode(sys.argv)
+    
+
+    app.run(port=9678, host="0.0.0.0", debug=debug_mode)
 

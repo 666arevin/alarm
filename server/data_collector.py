@@ -6,11 +6,12 @@ from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
 import json
+from logging import Logger
 from logging.config import dictConfig
 import logging
 import sys
 import time
-from threading import Thread
+import traceback
 
 # основная папка
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,23 +25,31 @@ if str(BASE_DIR) not in sys.path:
 from utils import * 
 from alarm_exception import *
     
+def logger_configuration(file_name: str | Path, debug: bool) -> Logger:
+    # настраивавем логгер
+    with open(file_name, mode="r", encoding="utf-8") as f:
+        LOGGER_CONFIG = json.load(f)
+    # добавляем путь для сохранения логов
+    LOGGER_CONFIG["handlers"]["file"]["filename"] = str(DATA_FOLDER / "app.log")
 
-# настраивавем логгер
-with open(DATA_FOLDER / "log_settings.jsonc", mode="r", encoding="utf-8") as f:
-    LOGGER_CONFIG = json.load(f)
-    
-# добавляем путь для сохранения логов
-LOGGER_CONFIG["handlers"]["file"]["filename"] = str(DATA_FOLDER / "app.log")
+    # изменяем уровень логирования
+    if not debug:
+        LOGGER_CONFIG["handlers"].pop("console")
+        LOGGER_CONFIG["root"]["handlers"].remove("console")
 
-# запускаем логгер    
-dictConfig(LOGGER_CONFIG)
-logger = logging.getLogger()
+    # запускаем логгер    
+    dictConfig(LOGGER_CONFIG)
+    logger = logging.getLogger()
+
+    return logger
 
 
+debug_mode = get_debug_mode(sys.argv)
 
-class FormatDataError(Exception):
-    def __init__(self, message: str):
-        super().__init__(message)
+# получаем обьект логгера
+logger = logger_configuration(DATA_FOLDER / "log_settings.jsonc", debug=debug_mode)
+
+
 
 
 class DataAggregationService():
@@ -60,7 +69,7 @@ class DataAggregationService():
         """
         try:
             # получаем основные данные
-            response = session.get("https://t.me/s/radarrussiia", timeout=6)
+            response = session.get("https://t.me/s/radarrussiia", timeout=5)
 
             if response.status_code == 200: 
                 # возвращает не обработанный html
@@ -239,6 +248,9 @@ class RadarPipelineCoordinator:
                             msg="ВНИМАНИЕ: локальный сервер не запущен. Нет доступа к радар."
                         )
 
+                # при серьезной ошибке будем ждать 6 сек
+                time.sleep(6)
+
             else:
                 # логируем если все успешно
                 logger.debug(
@@ -306,19 +318,25 @@ def main():
     manager = RadarPipelineCoordinator()
 
     while True:
-        # создаем сессию подключения
-        with requests.Session() as session:
+        try:
+            # создаем сессию подключения
+            with requests.Session() as session:
 
-            # полчаем данные от радара
-            data = manager.fetch_with_retries(session=session)
+                # полчаем данные от радара
+                data = manager.fetch_with_retries(session=session)
 
-            # обрабатываем данные и сохраняем их
-            manager.manage_data_flow(data)
+                # обрабатываем данные и сохраняем их
+                manager.manage_data_flow(data)
 
-            # отправляем информацию на сервер что все работает
-            data_collector_heartbeat()
+                # отправляем информацию на сервер что все работает
+                data_collector_heartbeat()
 
-            # ждем 1 минуту перед следующем запросом
-            time.sleep(60)
+                # ждем 1 минуту перед следующем запросом
+                time.sleep(60)
+        except Exception:
+
+            logger.exception(
+                msg="Непредвиденная ошибка ошибка."
+            )
 
 main()

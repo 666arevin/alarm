@@ -1,7 +1,7 @@
 import logging
 from typing import Literal
 from os import path
-import time
+import sys
 from pathlib import Path
 import json
 import re
@@ -176,12 +176,31 @@ def str_to_bool(s: str) -> bool:
     return s.lower() == "true"
 
 
-# rotating_save_json(
-#     {"test": "data"},
-#     "/home/sto-ormik/programming/python/projects/alarm/server/data/radar_data_proc.json",
-#     BackupCount=5,
-#     maxBytes=1 # 5 mb
-# )
+def get_debug_mode(argv: list) -> bool:
+    """Функция проверят если 1 аргумент (кроме испольняемого файла).
+    Если есть возвращает его значение true или false
+
+    Args:
+        argv (list): Аргументы из sys.argv
+
+    Raises:
+        Exception: Ошибка если введен неверный аргумент
+
+    Returns:
+        bool: 
+    """
+    if len(argv) > 1:
+
+        # если аргумент указан верно
+        if argv[1].lower() in ("true", "false"):
+            return str_to_bool(argv[1])
+        # если аргумент введен неверно
+        else:
+            raise TypeError("Указан неверный аргумент для DEBUD, доступно (true, false)")
+    # если ничего не ввели
+    else:
+        return False
+
 
     
 

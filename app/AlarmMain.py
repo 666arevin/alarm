@@ -6,8 +6,6 @@ from asyncio.exceptions import TimeoutError
 import requests
 from requests import Session, RequestException
 from aioconsole import ainput
-from bs4 import BeautifulSoup
-from utils import process_data
 from datetime import timedelta, datetime
 import re
 from re import Pattern
@@ -165,23 +163,20 @@ async def main():
                     session,
                 )
 
-                data["2026-10-16T23:10:52+03:00"] = {
-                    "message_data": "жуковский"
-                }
 
                 if data.values():
                     last_message_time = max(
-                        m.get("message_data") for m in data.values()
+                        m for m in data.keys()
                     )
 
                 is_matched =  manager.patter_search(data)
-
+                print(last_message_time)
                 print("Отработало")
 
                 if is_matched:
                     await alarm.alarm_active()
 
-            except RequestException:
+            except Exception:
                 await alarm.alarm_active()
 
         time.sleep(60)
